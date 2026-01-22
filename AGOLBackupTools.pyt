@@ -106,21 +106,9 @@ class BackupOrgData(object):
                 return
 
             total_items = len(items)
-            log_msg(f"Found {total_items} Feature Services. Sorting...")
+            log_msg(f"Found {total_items} Feature Services. Beginning backup loop...")
 
-            # 5. Complex Sorting
-            # Logic: 
-            #  1. Authoritative (True > False)
-            #  2. Modified Date (Newest > Oldest)
-            #  3. Size (Largest > Smallest) - Proxy for 'number of records'
-            items.sort(
-                key=lambda x: (
-                    x.content_status == 'org_authoritative', 
-                    x.modified, 
-                    x.size
-                ), 
-                reverse=True
-            )
+            # --- Sorting Removed Here ---
 
             # 6. Create Backup GDB
             gdb_name = f"AGOL_Backup_{date_str}.gdb"
