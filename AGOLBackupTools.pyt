@@ -16,7 +16,7 @@ class BackupOrgData(object):
     def __init__(self):
         """Define the tool."""
         self.label = "Backup Organization Data"
-        self.description = "Backs up ALL Org Feature Layers with history, attachments, and GlobalIDs."
+        self.description = "Backs up ALL Org Feature Layers and Tables with history, attachments, and GlobalIDs. Skips Feature Layer Views."
         self.canRunInBackground = False
 
     def getParameterInfo(self):
@@ -34,23 +34,23 @@ class BackupOrgData(object):
     def setup_logging(self, log_dir):
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
-        
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = os.path.join(log_dir, f"Org_Backup_Log_{timestamp}.txt")
-        
+
         logging.basicConfig(
             filename=log_file,
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             filemode='w'
         )
-        
+
         # Console Handler
         console = logging.StreamHandler()
         console.setLevel(logging.INFO)
         console.setFormatter(logging.Formatter('%(message)s'))
         logging.getLogger('').addHandler(console)
-        
+
         return log_file
 
     def sanitize_name(self, name):
@@ -65,10 +65,10 @@ class BackupOrgData(object):
         base_backup_dir = r"D:\AGOL_Backups"
         log_dir = os.path.join(base_backup_dir, "Logs")
         date_str = datetime.datetime.now().strftime("%Y%m%d")
-        
+
         # Setup Logging
         log_file = self.setup_logging(log_dir)
-        
+
         def log_msg(msg, level="info"):
             if level == "info":
                 logging.info(msg)
@@ -92,7 +92,7 @@ class BackupOrgData(object):
             # 3. Environment Settings for Data Integrity
             arcpy.env.overwriteOutput = True
             # CRITICAL: This ensures Global IDs are kept as Global IDs
-            arcpy.env.preserveGlobalIds = True 
+            arcpy.env.preserveGlobalIds = True
             # Note: Attachments are handled automatically by ExportFeatures for services
 
             # 4. Search for ALL Feature Services in the Org
@@ -100,7 +100,7 @@ class BackupOrgData(object):
             # We set max_items to 10000 to ensure we catch everything.
             log_msg("Scanning Organization for Feature Services...")
             items = gis.content.search(query="type:\"Feature Service\"", max_items=10000)
-            
+
             if not items:
                 log_msg("No items found.", "warning")
                 return
@@ -108,15 +108,13 @@ class BackupOrgData(object):
             total_items = len(items)
             log_msg(f"Found {total_items} Feature Services. Beginning backup loop...")
 
-            # --- Sorting Removed Here ---
-
             # 6. Create Backup GDB
             gdb_name = f"AGOL_Backup_{date_str}.gdb"
             gdb_full_path = os.path.join(base_backup_dir, gdb_name)
-            
+
             if not os.path.exists(base_backup_dir):
                 os.makedirs(base_backup_dir)
-            
+
             if not arcpy.Exists(gdb_full_path):
                 arcpy.management.CreateFileGDB(base_backup_dir, gdb_name)
 
@@ -125,12 +123,16 @@ class BackupOrgData(object):
             fail_count = 0
 
             for i, item in enumerate(items, 1):
+                # Skip Feature Layer Views
+                if "View Service" in item.typeKeywords:
+                    log_msg(f"Skipping Item {i} ({item.title}): Feature Layer View", "info")
+                    continue
                 try:
                     # Detailed Messaging
                     auth_tag = "[AUTHORITATIVE]" if item.content_status == 'org_authoritative' else ""
                     log_msg(f"Processing Item {i} of {total_items}: {item.title} {auth_tag}")
-                    
-                    # Access layers
+
+                    # Access layers and tables
                     layers = item.layers + item.tables
                     total_sublayers = len(layers)
 
@@ -141,39 +143,40 @@ class BackupOrgData(object):
                     for j, layer in enumerate(layers, 1):
                         layer_name = layer.properties.name
                         log_msg(f"   - Backing up layer {j} of {total_sublayers}: {layer_name}")
-                        
+
                         # Naming Convention: ItemName_LayerName_Date
                         safe_item = self.sanitize_name(item.title)
                         safe_layer = self.sanitize_name(layer_name)
-                        
-                        # Shorten if too long (FGDB limit ~160 chars)
-                        # We leave room for the date suffix
                         prefix = f"{safe_item}_{safe_layer}"[:120]
                         out_name = f"{prefix}_{date_str}"
                         out_path = os.path.join(gdb_full_path, out_name)
 
                         # Check if already exists (in case of duplicate names in source)
                         if arcpy.Exists(out_path):
-                            out_name = f"{out_name}_{j}" # Append index to make unique
+                            out_name = f"{out_name}_{j}"
                             out_path = os.path.join(gdb_full_path, out_name)
 
-                        # Perform Export
-                        # This pulls Attachments + GlobalIDs (due to env setting)
+                        # Decide export method: feature or table
                         try:
-                            arcpy.conversion.ExportFeatures(layer.url, out_path)
+                            if hasattr(layer.properties, "geometryType") and layer.properties.geometryType:
+                                # It's a feature layer
+                                arcpy.conversion.ExportFeatures(layer.url, out_path)
+                            else:
+                                # It's a table
+                                arcpy.conversion.TableToTable(layer.url, gdb_full_path, out_name)
                             success_count += 1
                         except Exception as layer_error:
-                            log_msg(f"     FAILED to export layer {layer_name}: {str(layer_error)}", "error")
+                            log_msg(f"     FAILED to export layer or table {layer_name}: {str(layer_error)}", "error")
                             fail_count += 1
-                
+
                 except Exception as item_error:
                     log_msg(f"   Error accessing item {item.title}: {str(item_error)}", "error")
                     fail_count += 1
 
             # 8. Final Report
             log_msg("--- Backup Process Finished ---")
-            log_msg(f"Layers Exported: {success_count}")
-            log_msg(f"Layers Failed:   {fail_count}")
+            log_msg(f"Layers/Tables Exported: {success_count}")
+            log_msg(f"Layers/Tables Failed:   {fail_count}")
             log_msg(f"Backup GDB:      {gdb_full_path}")
 
         except Exception as e:
