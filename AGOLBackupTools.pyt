@@ -16,7 +16,11 @@ class BackupOrgData(object):
     def __init__(self):
         """Define the tool."""
         self.label = "Backup Organization Data"
-        self.description = "Backs up ALL Org Feature Layers and Tables with history, attachments, and GlobalIDs. Skips Feature Layer Views."
+        self.description = (
+            "Backs up ALL Org Feature Layers and Tables with history, attachments, and GlobalIDs. "
+            "Skips Feature Layer Views. "
+            "Prevents duplicate backups of the same layer/table in this run."
+        )
         self.canRunInBackground = False
 
     def getParameterInfo(self):
@@ -91,13 +95,9 @@ class BackupOrgData(object):
 
             # 3. Environment Settings for Data Integrity
             arcpy.env.overwriteOutput = True
-            # CRITICAL: This ensures Global IDs are kept as Global IDs
-            arcpy.env.preserveGlobalIds = True
-            # Note: Attachments are handled automatically by ExportFeatures for services
+            arcpy.env.preserveGlobalIds = True  # Ensures Global IDs are preserved
 
             # 4. Search for ALL Feature Services in the Org
-            # We remove the 'owner' filter.
-            # We set max_items to 10000 to ensure we catch everything.
             log_msg("Scanning Organization for Feature Services...")
             items = gis.content.search(query="type:\"Feature Service\"", max_items=10000)
 
@@ -108,7 +108,7 @@ class BackupOrgData(object):
             total_items = len(items)
             log_msg(f"Found {total_items} Feature Services. Beginning backup loop...")
 
-            # 6. Create Backup GDB
+            # 5. Create Backup GDB
             gdb_name = f"AGOL_Backup_{date_str}.gdb"
             gdb_full_path = os.path.join(base_backup_dir, gdb_name)
 
@@ -118,9 +118,10 @@ class BackupOrgData(object):
             if not arcpy.Exists(gdb_full_path):
                 arcpy.management.CreateFileGDB(base_backup_dir, gdb_name)
 
-            # 7. Backup Loop
+            # 6. Backup Loop - Prevent duplicate URLs
             success_count = 0
             fail_count = 0
+            backed_up_urls = set()  # Track all URLs already backed up
 
             for i, item in enumerate(items, 1):
                 # Skip Feature Layer Views
@@ -128,7 +129,6 @@ class BackupOrgData(object):
                     log_msg(f"Skipping Item {i} ({item.title}): Feature Layer View", "info")
                     continue
                 try:
-                    # Detailed Messaging
                     auth_tag = "[AUTHORITATIVE]" if item.content_status == 'org_authoritative' else ""
                     log_msg(f"Processing Item {i} of {total_items}: {item.title} {auth_tag}")
 
@@ -141,7 +141,15 @@ class BackupOrgData(object):
                         continue
 
                     for j, layer in enumerate(layers, 1):
+                        url = getattr(layer, "url", None)
                         layer_name = layer.properties.name
+
+                        # Deduplicate by URL
+                        if url in backed_up_urls:
+                            log_msg(f"   - Skipping duplicate layer/table {layer_name}", "info")
+                            continue
+                        backed_up_urls.add(url)
+
                         log_msg(f"   - Backing up layer {j} of {total_sublayers}: {layer_name}")
 
                         # Naming Convention: ItemName_LayerName_Date
@@ -159,10 +167,8 @@ class BackupOrgData(object):
                         # Decide export method: feature or table
                         try:
                             if hasattr(layer.properties, "geometryType") and layer.properties.geometryType:
-                                # It's a feature layer
                                 arcpy.conversion.ExportFeatures(layer.url, out_path)
                             else:
-                                # It's a table
                                 arcpy.conversion.TableToTable(layer.url, gdb_full_path, out_name)
                             success_count += 1
                         except Exception as layer_error:
@@ -173,7 +179,7 @@ class BackupOrgData(object):
                     log_msg(f"   Error accessing item {item.title}: {str(item_error)}", "error")
                     fail_count += 1
 
-            # 8. Final Report
+            # 7. Final Report
             log_msg("--- Backup Process Finished ---")
             log_msg(f"Layers/Tables Exported: {success_count}")
             log_msg(f"Layers/Tables Failed:   {fail_count}")
