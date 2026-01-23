@@ -54,7 +54,7 @@ def marvin_warn(messages, text):
     quotes = [
         "I've got this terrible pain in all the diodes down my left side.",
         "Dreadful, just dreadful.",
-        "I'd offer a solution, but you wouldn't listen.",
+        "I'd offer a solution, but you wouldn't listen, you never do. I bet you don't even read this, do you...",
         "Everything's gone wrong, as usual.",
         "I'm feeling very depressed.",
         "I'd sigh, but I don't have the lungs for it."
